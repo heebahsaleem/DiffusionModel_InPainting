@@ -1,0 +1,7 @@
+__pycache__/
+data/
+runs/
+*.png
+mnist_checkpoints_server/
+mnist_scheduler*/
+generated_samples_kaggle/
