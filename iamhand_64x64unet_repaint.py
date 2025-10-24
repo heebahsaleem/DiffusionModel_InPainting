@@ -80,7 +80,7 @@ class IAMDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         image = Image.open(self.image_paths[idx])
         image = self.transform(image)
-        image = image.repeat(2, 1, 1)  # [1,64,256] -> [2,64,256]
+        image = image.repeat(2, 1, 1)  
         return image, 0
 
 #diffusin params
