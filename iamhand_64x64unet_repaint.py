@@ -4,32 +4,43 @@ from torchvision import transforms
 import matplotlib.pyplot as plt
 import os
 from PIL import Image
+import numpy as np
 import random
-import torch.nn.functional as F
-import torchvision.transforms.functional as TF
+import os
+import torch
+from tqdm import tqdm
 
-device = "cuda:7" if torch.cuda.is_available() else "cpu"
+
+device = "cuda:3" if torch.cuda.is_available() else "cpu"
 print("Using device:", device)
 
-#unet
 class HandwritingUNet(nn.Module):
     def __init__(self):
         super().__init__()
-        self.enc1 = self._block(2, 128)
-        self.enc2 = self._block(128, 256)
-        self.enc3 = self._block(256, 512)
-        self.enc4 = self._block(512, 1024)
-        self.bottleneck = self._block(1024, 1024)
+        # Encoder (1 input channel - grayscale)
+        self.enc1 = self._block(1, 64)
+        self.enc2 = self._block(64, 128)
+        self.enc3 = self._block(128, 256)
+        self.enc4 = self._block(256, 512)
+
+        # Bottleneck (with time conditioning)
+        self.bottleneck = self._block(512, 512)
         self.time_embed = nn.Sequential(
-            nn.Linear(1, 512),
+            nn.Linear(1, 256),
             nn.SiLU(),
-            nn.Linear(512, 1024),
+            nn.Linear(256, 512),
         )
-        self.dec1 = self._block(1024 + 1024, 512)
-        self.dec2 = self._block(512 + 512, 256)
-        self.dec3 = self._block(256 + 256, 128)
-        self.dec4 = self._block(128 + 128, 64)
-        self.final = nn.Conv2d(64, 2, kernel_size=1)
+
+        # Decoder
+        self.dec1 = self._block(512 + 512, 256)  # skip from enc4
+        self.dec2 = self._block(256 + 256, 128)  # skip from enc3
+        self.dec3 = self._block(128 + 128, 64)   # skip from enc2
+        self.dec4 = self._block(64 + 64, 64)     # skip from enc1
+
+        # Final output layer
+        self.final = nn.Conv2d(64, 1, kernel_size=1)
+
+        # Sampling layers
         self.downsample = nn.MaxPool2d(2)
         self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
 
@@ -44,32 +55,59 @@ class HandwritingUNet(nn.Module):
         )
 
     def forward(self, x, t):
+        # Time embedding
         t_embed = self.time_embed(t.unsqueeze(-1).float())
         t_embed = t_embed.unsqueeze(-1).unsqueeze(-1)
+
+        # Encoder path
         e1 = self.enc1(x)
         e2 = self.enc2(self.downsample(e1))
         e3 = self.enc3(self.downsample(e2))
         e4 = self.enc4(self.downsample(e3))
+
+        # Bottleneck
         bottleneck = self.bottleneck(self.downsample(e4))
         bottleneck = bottleneck + t_embed
+
+        # Decoder path (with skip connections)
         d1 = self.dec1(torch.cat([self.upsample(bottleneck), e4], dim=1))
         d2 = self.dec2(torch.cat([self.upsample(d1), e3], dim=1))
         d3 = self.dec3(torch.cat([self.upsample(d2), e2], dim=1))
         d4 = self.dec4(torch.cat([self.upsample(d3), e1], dim=1))
+
+        # Output
         return self.final(d4)
 
-#dataset loader
-class IAMDataset(torch.utils.data.Dataset):
-    def __init__(self, root_dir):
+
+model = HandwritingUNet().to(device)
+model.load_state_dict(torch.load("/Home/siv36/hesal5042/Research/NORCE/hello/RePaint/guided_diffusion_mnist/guided_diffusion/handwriting_outputsssss/model_epoch_100.pth"))
+model.eval()
+
+#same diffusion parameters from your training
+T = 1000
+beta_start = 1e-4
+beta_end = 0.02
+betas = torch.linspace(beta_start, beta_end, T, device=device)
+alphas = 1. - betas
+alphas_cumprod = torch.cumprod(alphas, dim=0)
+
+sqrt_alphas_cumprod = torch.sqrt(alphas_cumprod) 
+sqrt_one_minus_alphas_cumprod = torch.sqrt(1. - alphas_cumprod)
+print("=== FINALLY SOMTHEING WORKING REPAINT IMPLEMENTATION PHEWWW===")
+
+class IAMDatasetHF(torch.utils.data.Dataset):
+    def __init__(self, root_dir, img_size=(64, 256)):
+        self.root_dir = root_dir
+        self.img_size = img_size
         self.image_paths = []
         for subdir, _, files in os.walk(root_dir):
             for file in files:
                 if file.lower().endswith(('.png', '.jpg', '.jpeg')):
                     self.image_paths.append(os.path.join(subdir, file))
-        print(f"Found {len(self.image_paths)} images")
+        
         self.transform = transforms.Compose([
             transforms.Grayscale(),
-            transforms.Resize((64, 64)),  # Match training
+            transforms.Resize(img_size),
             transforms.ToTensor(),
             transforms.Normalize([0.5], [0.5])
         ])
@@ -78,90 +116,100 @@ class IAMDataset(torch.utils.data.Dataset):
         return len(self.image_paths)
 
     def __getitem__(self, idx):
-        image = Image.open(self.image_paths[idx])
+        img_path = self.image_paths[idx]
+        image = Image.open(img_path)
         image = self.transform(image)
-        image = image.repeat(2, 1, 1)  
         return image, 0
 
-#diffusin params
-T = 1000
-beta_start = 1e-4
-beta_end = 0.02
-betas = torch.linspace(beta_start, beta_end, T, device=device)
-alphas = 1. - betas
-alphas_cumprod = torch.cumprod(alphas, dim=0)
-model = HandwritingUNet().to(device)
-model_path = "/Home/siv36/hesal5042/Research/NORCE/hello/RePaint/guided_diffusion_mnist/guided_diffusion/handwriting_output/model_epoch_100.pth"
-model.load_state_dict(torch.load(model_path, map_location=device))
-# print(f"loaded model from {model_path}")
-model.eval()
-dataset = IAMDataset(root_dir='iamHandwriting_dataset/words')
+
+iam_dataset = IAMDatasetHF(root_dir='iamHandwriting_dataset/words')
+
 B = 4
-indices = random.sample(range(len(dataset)), min(B, len(dataset)))
-images = torch.stack([dataset[i][0] for i in indices]).to(device)
+indices = random.sample(range(len(iam_dataset)), B)
+print(f"Randomly selected indices: {indices}")
+
+image = torch.stack([iam_dataset[i][0] for i in indices]).to(device)
+
+#create mask
+mask = torch.ones_like(image)
+mask[:, :, :, 132:] = 0  # Right half masked
+known_region = image * mask
 
 
-mask = torch.ones_like(images)
-mask[:, :, :, 32:] = 0
-mask = TF.gaussian_blur(mask, kernel_size=9, sigma=3)
-mask = mask.clamp(0, 1)
-# known_regions = images * mask
-image_mean = images.mean(dim=[2, 3], keepdim=True)
-noisy_fill = image_mean + torch.randn_like(images) * 0.1
-known_regions = images * mask + noisy_fill * (1 - mask)
 
+def repaint_handwriting(model, x0, mask, T, jump_length=10, jump_n_sample=5):
+    model.eval()
+    device = x0.device
+    B = x0.size(0)
 
-#repaint
-def repaint_handwriting(model, x, mask, steps=500, jump_length=5, jump_n_sample=15):
-    B = x.size(0)
-    x_t = torch.randn_like(x)
-    for t in reversed(range(steps)):
-        t_tensor = torch.tensor([t] * B, device=device, dtype=torch.long)
+    x_t = torch.randn_like(x0)  # Start from pure noise
+
+    for t in tqdm(range(T - 1, -1, -1), desc="RePaint Sampling"):
+        t_tensor = torch.tensor([t] * B, device=device).long()
+
+        # Predict noise
         with torch.no_grad():
-            noise_pred = model(x_t, t_tensor)
-        alpha_t = alphas_cumprod[t]
+            predicted_noise = model(x_t, t_tensor)
+
+        alpha_t = alphas[t]
         beta_t = 1 - alpha_t
-        noise = torch.randn_like(x_t) if t > 0 else torch.zeros_like(x_t)
-        x_t_prev = (1 / torch.sqrt(alpha_t)) * (x_t - (beta_t / torch.sqrt(1 - alpha_t)) * noise_pred) + torch.sqrt(beta_t) * noise
-        x_t_prev = mask * x + (1 - mask) * x_t_prev
-        if t % jump_length == 0 and t > 0:
+
+        # Estimate x0 from model output
+        sqrt_recip_alpha = 1 / torch.sqrt(alphas[t])
+        sqrt_recipm1_alpha = (1 - alphas[t]) / torch.sqrt(1 - alphas_cumprod[t])
+        x0_pred = sqrt_recip_alpha * (x_t - sqrt_recipm1_alpha * predicted_noise)
+
+        # Generate noisy known region (x_t_known) - kristian
+        noise_known = torch.randn_like(x0)
+        x_t_known = sqrt_alphas_cumprod[t] * x0 + sqrt_one_minus_alphas_cumprod[t] * noise_known
+
+        #combinedd known & unknown regions
+        x_t_combined = mask * x_t_known + (1 - mask) * x0_pred
+
+        # Reverse diffusion step
+        if t > 0:
+            noise = torch.randn_like(x_t)
+        else:
+            noise = torch.zeros_like(x_t)
+
+        x_t_prev = (
+            (1 / torch.sqrt(alpha_t)) *
+            (x_t_combined - ((1 - alpha_t) / torch.sqrt(1 - alphas_cumprod[t])) * predicted_noise)
+        ) + torch.sqrt(beta_t) * noise
+
+        # RePaint jump resampling
+        if (t % jump_length == 0) and (t > 0):
             for _ in range(jump_n_sample):
                 noise_jump = torch.randn_like(x_t_prev)
                 x_t_prev = torch.sqrt(alpha_t) * x_t_prev + torch.sqrt(1 - alpha_t) * noise_jump
-                x_t_prev = mask * x + (1 - mask) * x_t_prev
-                x_t = 0.7 * x_t_prev + 0.3 * x_t  
+                x_t_prev = mask * x_t_known + (1 - mask) * x_t_prev
+
+        x_t = x_t_prev  # Move to next step
+
     output = (x_t + 1) / 2
-    return torch.clamp(output, 0, 1)
-
-# print("RePaint from here")
-output = repaint_handwriting(model, known_regions, mask)
-
-def main():
+    output = torch.clamp(output, 0, 1)
+    return output
 
 
+output = repaint_handwriting(
+    model, known_region, mask, T, jump_length=10, jump_n_sample=10
 
+)
 
+print("fdsff")
+plt.figure(figsize=(12, 4))
+plt.subplot(1, 3, 1)
+plt.imshow(image[0, 0].cpu(), cmap="gray",vmin=0, vmax=1)
+plt.title("Original")
 
-    os.makedirs('handwriting_repaint_64x64', exist_ok=True)
-    for i in range(B):
-        fig, axes = plt.subplots(1, 3, figsize=(18, 6))  
-        images_to_plot = [
-            (images[i, 0].cpu(), "Original"),
-            (known_regions[i, 0].cpu(), "Masked"),
-            (output[i, 0].cpu(), "RePainted")
-        ]
-        for ax, (img, title) in zip(axes, images_to_plot):
-            ax.imshow(img, cmap="gray", vmin=0, vmax=1)
-            ax.set_title(title)
-            # ax.axis('off')
-            for spine in ax.spines.values():
-                spine.set_edgecolor('black')
-                spine.set_linewidth(2)
-        plt.tight_layout()
-        plt.savefig(f'handwriting_repaint_64x64/result_{i}.png', dpi=150, bbox_inches='tight')
-        plt.close()
-    print("ePaint completed and saved in 'handwriting_repaint_64x64/'")
+plt.subplot(1, 3, 2)
+plt.imshow((image * mask)[0, 0].cpu(), cmap="gray",vmin=0, vmax=1)
+plt.title("Masked")
 
+plt.subplot(1, 3, 3)
+plt.imshow(output[0, 0].detach().cpu(), cmap="gray",vmin=0, vmax=1)
+# plt.imshow(normalize(output[0,0].detach().cpu()), cmap="gray")
+plt.title("RePainted")
+# plt.show()
+plt.savefig('sine_wave10.png') 
 
-if __name__ == "__main__":
-    main()
