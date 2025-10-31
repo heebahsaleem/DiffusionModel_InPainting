@@ -79,15 +79,13 @@ class HandwritingUNet(nn.Module):
         return self.final(d4)
 
 
+
+
 model = HandwritingUNet().to(device)
 model.load_state_dict(torch.load("/Home/siv36/hesal5042/Research/NORCE/hello/RePaint/guided_diffusion_mnist/guided_diffusion/handwriting_outputsssss/model_epoch_100.pth"))
 model.eval()
 
-<<<<<<< HEAD
 #same diffusion parameters from your training
-=======
-# Use the same diffusion parameters from your training
->>>>>>> 876e51a (correcting the masking.)
 T = 1000
 beta_start = 1e-4
 beta_end = 0.02
@@ -100,7 +98,7 @@ sqrt_one_minus_alphas_cumprod = torch.sqrt(1. - alphas_cumprod)
 print("=== FINALLY SOMTHEING WORKING REPAINT IMPLEMENTATION PHEWWW===")
 
 class IAMDatasetHF(torch.utils.data.Dataset):
-    def __init__(self, root_dir, img_size=(64, 256)):
+    def __init__(self, root_dir, img_size=(64, 128)):
         self.root_dir = root_dir
         self.img_size = img_size
         self.image_paths = []
@@ -130,18 +128,18 @@ iam_dataset = IAMDatasetHF(root_dir='iamHandwriting_dataset/words')
 
 B = 4
 indices = random.sample(range(len(iam_dataset)), B)
-print(f"Randomly selected indices: {indices}")
+print(f"Selecting indices randomly: {indices}")
 
 image = torch.stack([iam_dataset[i][0] for i in indices]).to(device)
 
 #create mask
 mask = torch.ones_like(image)
-mask[:, :, :, 132:] = 0  # Right half masked
+mask[:, :,:,50:] = 0  # Right half masked
 known_region = image * mask
 
 
+def repaint_handwriting(model, x0, mask, T, jump_length, jump_n_sample):
 
-def repaint_handwriting(model, x0, mask, T, jump_length=10, jump_n_sample=5):
     model.eval()
     device = x0.device
     B = x0.size(0)
@@ -149,75 +147,91 @@ def repaint_handwriting(model, x0, mask, T, jump_length=10, jump_n_sample=5):
     x_t = torch.randn_like(x0)  # Start from pure noise
 
     for t in tqdm(range(T - 1, -1, -1), desc="RePaint Sampling"):
-        t_tensor = torch.tensor([t] * B, device=device).long()
 
-        # Predict noise
-        with torch.no_grad():
-            predicted_noise = model(x_t, t_tensor)
+        for u in range(jump_n_sample if (t > 0 and t % jump_length == 0) else 1):
+            t_tensor = torch.tensor([t] * B, device=device).long()
 
-        alpha_t = alphas[t]
-        beta_t = 1 - alpha_t
 
-        # Estimate x0 from model output
-        sqrt_recip_alpha = 1 / torch.sqrt(alphas[t])
-        sqrt_recipm1_alpha = (1 - alphas[t]) / torch.sqrt(1 - alphas_cumprod[t])
-        x0_pred = sqrt_recip_alpha * (x_t - sqrt_recipm1_alpha * predicted_noise)
+            with torch.no_grad():
+                predicted_noise = model(x_t, t_tensor) #predict nise
 
-<<<<<<< HEAD
-        # Generate noisy known region (x_t_known) - kristian
-=======
-        # Generate noisy known region (x_t_known)
->>>>>>> 876e51a (correcting the masking.)
-        noise_known = torch.randn_like(x0)
-        x_t_known = sqrt_alphas_cumprod[t] * x0 + sqrt_one_minus_alphas_cumprod[t] * noise_known
+            if t > 0:
+                noise_known = torch.randn_like(x0)
+            else:
+                noise_known = torch.zeros_like(x0)
+            
+            x_t_minus_1_known = (
+                sqrt_alphas_cumprod[t-1] * x0 + 
+                sqrt_one_minus_alphas_cumprod[t-1] * noise_known
+            ) if t > 0 else x0
 
-        #combinedd known & unknown regions
-        x_t_combined = mask * x_t_known + (1 - mask) * x0_pred
 
-        # Reverse diffusion step
-        if t > 0:
-            noise = torch.randn_like(x_t)
-        else:
-            noise = torch.zeros_like(x_t)
+            alpha_t = alphas[t]
+            alpha_t_cumprod = alphas_cumprod[t]
 
-        x_t_prev = (
-            (1 / torch.sqrt(alpha_t)) *
-            (x_t_combined - ((1 - alpha_t) / torch.sqrt(1 - alphas_cumprod[t])) * predicted_noise)
-        ) + torch.sqrt(beta_t) * noise
+            mean = (1 / torch.sqrt(alpha_t)) * (
+                x_t - ((1 - alpha_t) / torch.sqrt(1 - alpha_t_cumprod)) * predicted_noise
+            )
+            
 
-        # RePaint jump resampling
-        if (t % jump_length == 0) and (t > 0):
-            for _ in range(jump_n_sample):
-                noise_jump = torch.randn_like(x_t_prev)
-                x_t_prev = torch.sqrt(alpha_t) * x_t_prev + torch.sqrt(1 - alpha_t) * noise_jump
-                x_t_prev = mask * x_t_known + (1 - mask) * x_t_prev
+            if t > 0:
+                noise = torch.randn_like(x_t)
 
-        x_t = x_t_prev  # Move to next step
+                sigma_t = torch.sqrt(betas[t])  #or try sqrt((1-alpha_{t-1})/(1-alpha_t) * beta_t)
+            else:
+                noise = torch.zeros_like(x_t)
+                sigma_t = 0
+            
+            x_t_minus_1_unknown = mean + sigma_t * noise
+
+
+
+
+            x_t_minus_1 = mask * x_t_minus_1_known + (1 - mask) * x_t_minus_1_unknown
+
+
+            if u < (jump_n_sample - 1) and t > 0:
+
+                noise_resample = torch.randn_like(x_t_minus_1)
+                x_t = (
+                    torch.sqrt(alphas[t-1]) * x_t_minus_1 + 
+                    torch.sqrt(1 - alphas[t-1]) * noise_resample
+                )
+            else:
+                x_t = x_t_minus_1
+
 
     output = (x_t + 1) / 2
-    output = torch.clamp(output, 0, 1)
+    output = torch.clamp(output, -1, 1)
     return output
 
-
 output = repaint_handwriting(
-    model, known_region, mask, T, jump_length=10, jump_n_sample=10
+    model, known_region, mask, T, jump_length=5, jump_n_sample=20
 
 )
+def normalize(tensor):
+    """Convert from [0, 1] to [-1, 1]"""
+    return (tensor * 2) - 1
 
 print("fdsff")
 plt.figure(figsize=(12, 4))
+
 plt.subplot(1, 3, 1)
-plt.imshow(image[0, 0].cpu(), cmap="gray",vmin=0, vmax=1)
+# original_display = denormalize(image[0, 0].cpu())
+plt.imshow(normalize(image[0,0].cpu()), cmap="gray", vmin=0, vmax=1)
 plt.title("Original")
 
+# Masked (convert from normalized)  
 plt.subplot(1, 3, 2)
-plt.imshow((image * mask)[0, 0].cpu(), cmap="gray",vmin=0, vmax=1)
+# masked_display = denormalize((image * mask)[0, 0].cpu())
+plt.imshow(normalize((image*mask)[0,0].cpu()), cmap="gray", vmin=0, vmax=1)
 plt.title("Masked")
 
+# RePainted (already in [0,1])
 plt.subplot(1, 3, 3)
-plt.imshow(output[0, 0].detach().cpu(), cmap="gray",vmin=0, vmax=1)
-# plt.imshow(normalize(output[0,0].detach().cpu()), cmap="gray")
+repaint_out = normalize(output[0,0].detach().cpu())
+plt.imshow(repaint_out, cmap="gray", vmin=0, vmax=1)
 plt.title("RePainted")
 # plt.show()
 plt.savefig('sine_wave10.png') 
-
+    
