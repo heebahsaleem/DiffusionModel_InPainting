@@ -83,7 +83,11 @@ model = HandwritingUNet().to(device)
 model.load_state_dict(torch.load("/Home/siv36/hesal5042/Research/NORCE/hello/RePaint/guided_diffusion_mnist/guided_diffusion/handwriting_outputsssss/model_epoch_100.pth"))
 model.eval()
 
+<<<<<<< HEAD
 #same diffusion parameters from your training
+=======
+# Use the same diffusion parameters from your training
+>>>>>>> 876e51a (correcting the masking.)
 T = 1000
 beta_start = 1e-4
 beta_end = 0.02
@@ -159,7 +163,11 @@ def repaint_handwriting(model, x0, mask, T, jump_length=10, jump_n_sample=5):
         sqrt_recipm1_alpha = (1 - alphas[t]) / torch.sqrt(1 - alphas_cumprod[t])
         x0_pred = sqrt_recip_alpha * (x_t - sqrt_recipm1_alpha * predicted_noise)
 
+<<<<<<< HEAD
         # Generate noisy known region (x_t_known) - kristian
+=======
+        # Generate noisy known region (x_t_known)
+>>>>>>> 876e51a (correcting the masking.)
         noise_known = torch.randn_like(x0)
         x_t_known = sqrt_alphas_cumprod[t] * x0 + sqrt_one_minus_alphas_cumprod[t] * noise_known
 
