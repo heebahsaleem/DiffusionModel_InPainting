@@ -234,4 +234,3 @@ plt.imshow(repaint_out, cmap="gray", vmin=0, vmax=1)
 plt.title("RePainted")
 # plt.show()
 plt.savefig('sine_wave10.png') 
-    
