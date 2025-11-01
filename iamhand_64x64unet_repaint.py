@@ -200,37 +200,31 @@ def repaint_handwriting(model, x0, mask, T, jump_length, jump_n_sample):
             else:
                 x_t = x_t_minus_1
 
-
-    output = (x_t + 1) / 2
-    output = torch.clamp(output, -1, 1)
+    output = x_t
+    # output = (x_t + 1) / 2
+    output = torch.clamp(output, 0, 1)
     return output
 
 output = repaint_handwriting(
     model, known_region, mask, T, jump_length=5, jump_n_sample=20
 
 )
-def normalize(tensor):
-    """Convert from [0, 1] to [-1, 1]"""
-    return (tensor * 2) - 1
 
 print("fdsff")
 plt.figure(figsize=(12, 4))
 
 plt.subplot(1, 3, 1)
-# original_display = denormalize(image[0, 0].cpu())
-plt.imshow(normalize(image[0,0].cpu()), cmap="gray", vmin=0, vmax=1)
+plt.imshow(image[0,0].cpu(), cmap="gray", vmin=0, vmax=1)
 plt.title("Original")
 
-# Masked (convert from normalized)  
+
 plt.subplot(1, 3, 2)
-# masked_display = denormalize((image * mask)[0, 0].cpu())
-plt.imshow(normalize((image*mask)[0,0].cpu()), cmap="gray", vmin=0, vmax=1)
+plt.imshow((image*mask)[0,0].cpu(), cmap="gray", vmin=0, vmax=1)
 plt.title("Masked")
 
-# RePainted (already in [0,1])
+
 plt.subplot(1, 3, 3)
-repaint_out = normalize(output[0,0].detach().cpu())
-plt.imshow(repaint_out, cmap="gray", vmin=0, vmax=1)
+plt.imshow(output[0,0].detach().cpu(), cmap="gray", vmin=0, vmax=1)
 plt.title("RePainted")
 # plt.show()
 plt.savefig('sine_wave10.png') 
